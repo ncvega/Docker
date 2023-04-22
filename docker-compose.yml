@@ -13,7 +13,7 @@ services:
       - '81:81'
       - '443:443'
     environment:
-      DISABLE_IPV6: true
+      - DISABLE_IPV6=true
     volumes:
       - ./docker/proxy/data:/data
       - ./docker/proxy/letsencrypt:/etc/letsencrypt
@@ -55,13 +55,13 @@ services:
   redis:
     container_name: redis
     image: redis:latest
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    user: 1000:1000
+    command: redis-server
     volumes:
       - ./docker/redis/data:/data
     restart: unless-stopped
     networks:
-      - docker-servicios
+      docker-servicios:
         ipv4_address: 192.168.254.5
 
   bookstack:
@@ -73,20 +73,36 @@ services:
       - PUID=1000
       - PGID=1000
       - DB_HOST=postgres
-      - DB_PORT=5432
+      - DB_PORT=3306
       - APP_URL=${BOOKSTACK_URL}
       - DB_USER=bookstack
-      - DB_PASS=${BOOKSTACK_POSTGRES_PASSWORD}
+      - DB_PASS=${BOOKSTACK_MYSQL_PASSWORD}
       - DB_DATABASE=bookstackdb
     volumes:
       - ./docker/bookstack/data:/config
     restart: unless-stopped
     depends_on:
-      - postgres
+      - mysql
     networks:
       docker-servicios:
         ipv4_address: 192.168.254.6
-    
+
+  mysql:
+    image: mysql:latest
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: bookstackdb
+      MYSQL_USER: bookstack
+      MYSQL_PASSWORD: ${BOOKSTACK_MYSQL_PASSWORD}
+      TZ: America/Argentina/Mendoza
+    volumes:
+      - ./docker/mysql:/var/lib/mysql
+    restart: unless-stopped
+    networks:
+      docker-servicios:
+        ipv4_address: 192.168.254.7
+
   netbox:
     image: lscr.io/linuxserver/netbox:latest
     container_name: netbox
@@ -103,8 +119,7 @@ services:
       - DB_PORT=5432
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - ALLOWED_HOSTS=['*']
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - ALLOWED_HOSTS=['netbox.mydomain.com.ar','*']
       - REDIS_DB_TASK=0 # Database ID for tasks
       - REDIS_DB_CACHE=1 # Database ID for cache
       #- BASE_PATH=<BASE_PATH> #optional
@@ -122,12 +137,128 @@ services:
       - redis
     networks:
       docker-servicios:
-        ipv4_address: 192.168.254.7
+        ipv4_address: 192.168.254.8
+
+  zabbix-server:
+    container_name: zabbix-server
+    image: zabbix/zabbix-server-pgsql:alpine-latest
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./docker/zabbix/server/alertscripts:/usr/lib/zabbix/alertscripts:ro
+      - ./docker/zabbix/server/externalscripts:/usr/lib/zabbix/externalscripts:ro
+      - ./docker/zabbix/server/export:/var/lib/zabbix/export:rw
+      - ./docker/zabbix/server/modules:/var/lib/zabbix/modules:ro
+      - ./docker/zabbix/server/enc:/var/lib/zabbix/enc:ro
+      - ./docker/zabbix/server/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+      - ./docker/zabbix/server/mibs:/var/lib/zabbix/mibs:ro
+      - ./docker/zabbix/server/snmptraps:/var/lib/zabbix/snmptraps:ro
+    depends_on:
+      - postgres
+    environment:
+      - POSTGRES_USER=zabbix
+      - POSTGRES_PASSWORD=${ZABBIX_POSTGRES_PASSWORD}
+      - POSTGRES_DB=zabbixdb
+      - DB_SERVER_HOST=postgres
+      - ZBX_HISTORYSTORAGETYPES=log,text #Zabbix configuration variables
+      - ZBX_DEBUGLEVEL=1
+      - ZBX_HOUSEKEEPINGFREQUENCY=1
+      - ZBX_MAXHOUSEKEEPERDELETE=5000
+      - ZBX_PROXYCONFIGFREQUENCY=3600
+    networks:
+      docker-servicios:
+        ipv4_address: 192.168.254.9
+    restart: unless-stopped
+
+  zabbix-web:
+    container_name: zabbix-web
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-latest
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./docker/zabbix/web/ssl/nginx:/etc/ssl/nginx:ro
+      - ./docker/zabbix/web/modules/:/usr/share/zabbix/modules/:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    sysctls:
+      - net.core.somaxconn=65535
+    depends_on:
+      - zabbix-server
+      - postgres
+    environment:
+      - POSTGRES_USER=zabbix
+      - POSTGRES_PASSWORD=${ZABBIX_POSTGRES_PASSWORD}
+      - POSTGRES_DB=zabbixdb
+      - DB_SERVER_HOST=postgres
+      - ZBX_SERVER_HOST=zabbix-server
+      - ZBX_POSTMAXSIZE=64M
+      - PHP_TZ=America/Argentina/Mendoza
+      - ZBX_MAXEXECUTIONTIME=500
+    networks:
+      docker-servicios:
+        ipv4_address: 192.168.254.10
+    restart: unless-stopped
+
+  zabbix-agent:
+    container_name: zabbix-agent
+    image: zabbix/zabbix-agent:alpine-latest
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./docker/zabbix/agent/zabbix_agentd.d:/etc/zabbix/zabbix_agentd.d:ro
+      - ./docker/zabbix/agent/modules:/var/lib/zabbix/modules:ro
+      - ./docker/zabbix/agent/enc:/var/lib/zabbix/enc:ro
+      - ./docker/zabbix/agent/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+    privileged: true
+    pid: "host"
+    depends_on:
+      - zabbix-server
+    environment:
+      - ZBX_SERVER_HOST=zabbix-server
+    networks:
+      docker-servicios:
+        ipv4_address: 192.168.254.11
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    restart: always
+    depends_on:
+      - influxdb
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./docker/grafana:/var/lib/grafana
+
+  homepage: #Dashboard
+    image: ghcr.io/benphelps/homepage
+    container_name: homepages
+    volumes:
+      - ./docker/homepage/config:/app/config # Make sure your local config directory exists
+      - /var/run/docker.sock:/var/run/docker.sock:ro # (optional) For docker integrations
+    #ports: #Sin exposición de puertos para ingresar a través de NPM (Nginx Proxy Manager)
+    #  - 3000:3000
+    environment:
+      PUID: 1000
+      PGID: 1000
+    networks:
+      docker-base:
+        ipv4_address: 192.168.254.10
+    restart: unless-stopped
 
 networks:
   docker-servicios:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.254.254.0/24
-          gateway: 10.254.254.1
+        - subnet: 192.168.254.0/24
+          gateway: 192.168.254.1
