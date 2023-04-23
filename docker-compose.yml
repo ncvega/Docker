@@ -227,17 +227,18 @@ services:
   grafana:
     image: grafana/grafana
     container_name: grafana
-    restart: always
-    depends_on:
-      - influxdb
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_INSTALL_PLUGINS=
-    ports:
-      - '3000:3000'
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_INSTALL_PLUGINS=alexanderzobnin-zabbix-app
+      - TZ=America/Argentina/Mendoza
     volumes:
-      - ./docker/grafana:/var/lib/grafana
+      - ./docker/grafana/var/lib/grafana:/var/lib/grafana
+      - ./docker/grafana/etc/grafana:/etc/grafana
+    restart: unless-stopped
+    networks:
+      docker-servicios:
+        ipv4_address: 192.168.254.12
 
   homepage: #Dashboard
     image: ghcr.io/benphelps/homepage
@@ -252,7 +253,7 @@ services:
       PGID: 1000
     networks:
       docker-base:
-        ipv4_address: 192.168.254.10
+        ipv4_address: 192.168.254.13
     restart: unless-stopped
 
 networks:
