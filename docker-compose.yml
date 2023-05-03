@@ -232,6 +232,8 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_INSTALL_PLUGINS=alexanderzobnin-zabbix-app
       - TZ=America/Argentina/Mendoza
+      - PUID=1000
+      - PGID=1000
     volumes:
       - ./docker/grafana/var/lib/grafana:/var/lib/grafana
       - ./docker/grafana/etc/grafana:/etc/grafana
@@ -252,7 +254,7 @@ services:
       PUID: 1000
       PGID: 1000
     networks:
-      docker-base:
+      docker-servicios:
         ipv4_address: 192.168.254.13
     restart: unless-stopped
 
